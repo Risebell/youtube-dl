@@ -1,6 +1,8 @@
 # coding: utf-8
 from __future__ import unicode_literals
 
+import re
+
 from .common import InfoExtractor
 from ..compat import (
     compat_HTTPError,
@@ -134,4 +136,77 @@ class RoosterTeethIE(InfoExtractor):
             'formats': formats,
             'channel_id': attributes.get('channel_id'),
             'duration': int_or_none(attributes.get('length')),
+        }
+
+
+class RoosterTeethSeriesIE(RoosterTeethIE):
+    IE_NAME = 'roosterteeth:playlist'
+    _VALID_URL = r'https?://(?:.+?\.)?roosterteeth\.com/(?:series)/(?P<id>[^/?#&]+)(?:\?season=(?P<season>\d+))?'
+
+    _TESTS = [{
+        'url': 'https://roosterteeth.com/series/rwby-chibi',
+        'info_dict': {
+            'id': 'rwby-chibi',
+            'title': 'RWBY Chibi',
+        },
+        'playlist_count': 64,
+    }, {
+        'url': 'https://roosterteeth.com/series/world-of-remnant',
+        'info_dict': {
+            'id': 'world-of-remnant',
+            'title': 'RWBY: World of Remnant',
+        },
+        'playlist_count': 16,
+    }, {
+        'url': 'http://roosterteeth.com/series/rwby?season=3',
+        'info_dict': {
+            'id': 'rwby',
+            'title': 'RWBY',
+        },
+        'playlist_count': 12,
+    }]
+
+    _API_BASE_URL = 'https://svod-be.roosterteeth.com'
+    _SERIES_BASE_URL = _API_BASE_URL + '/api/v1/shows/'
+
+    def _url_trim_params(self, text):
+        return text.split('?', 1)[0]
+
+    def _real_extract(self, url):
+        matches = re.match(self._VALID_URL, url)
+        series_slug = matches.group('id')
+        season_number = int_or_none(matches.group('season'))
+        api_series_url = self._SERIES_BASE_URL + series_slug
+        # Add a 'per_page' parameter as the default value is just 20.
+        # This assumes that a show does not have more than 1000 seasons and a
+        # season does not have more than 1000 episodes.
+        default_params = '?order=asc&order_by=number&per_page=1000'
+
+        series = self._download_json(
+            api_series_url, series_slug, 'Downloading series JSON metadata'
+        )['data'][0]
+        title = series['attributes']['title']
+        seasons = self._download_json(
+            self._API_BASE_URL + self._url_trim_params(series['links']['seasons']) + default_params,
+            series_slug,
+            'Downloading seasons JSON metadata')['data']
+
+        entries = []
+        for season in seasons:
+            this_season_number = season['attributes']['number']
+            if season_number is None or this_season_number == season_number:
+                episodes = self._download_json(
+                    self._API_BASE_URL + self._url_trim_params(season['links']['episodes']) + default_params,
+                    series_slug,
+                    'Downloading episode JSON metadata for season %d' % this_season_number)['data']
+
+                entries.extend([
+                    self.url_result('http://roosterteeth.com' + episode['canonical_links']['self'])
+                    for episode in episodes])
+
+        return {
+            '_type': 'playlist',
+            'id': series_slug,
+            'title': title,
+            'entries': entries,
         }
